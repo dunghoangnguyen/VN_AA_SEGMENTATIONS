@@ -3,6 +3,13 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Make sure 00. VN_AGENT_SEGMENTATION has already been run
+# MAGIC
+# MAGIC <strong>https://adb-2294815648411921.1.azuredatabricks.net/?o=2294815648411921#notebook/149961153719421/command/1558101317682574
+
+# COMMAND ----------
+
 import pyspark.sql.functions as F 
 import pyspark.sql.types as T
 from pyspark.sql import Window
@@ -23,7 +30,13 @@ pd.set_option('display.max_columns', 200)
 
 # COMMAND ----------
 
-cutoff_date= '2024-05-31'
+x = 0 # Change x to the number of months before last month-end
+
+# Calculate the last month-end
+current_date = pd.Timestamp.now()
+last_month_end = current_date - pd.DateOffset(days=current_date.day)
+last_month_end = last_month_end - pd.DateOffset(months=x)
+cutoff_date= last_month_end.strftime('%Y-%m-%d')
 mth_partition = cutoff_date[:7] #'2024-03'
 
 in_path = '/dbfs/mnt/lab/vn/project/cpm/datamarts/'
@@ -52,8 +65,8 @@ out_path = '/dbfs/mnt/lab/vn/project/scratch/agent_activation/'
 # load branch info
 br_df = spark.read.parquet(branch_path).toPandas()
 # load agent df, scorecard and agent hierarchy mapping
-agent_df = pd.read_parquet(f'{in_path}TPARDM_MTHEND/')
-agent_scorecard_df = spark.read.parquet(agent_scorecard_path).toPandas()
+agent_df = spark.read.parquet(f'/mnt/lab/vn/project/cpm/datamarts/TPARDM_MTHEND/').filter(F.col("image_date") == cutoff_date).toPandas()
+agent_scorecard_df = spark.read.parquet(agent_scorecard_path).filter(F.col("monthend_dt") == cutoff_date).toPandas()
 agent_mapping_df = spark.read.parquet(agent_mapping_path).toPandas()
 
 # retrieve agency flag to identify the agency channel
@@ -92,7 +105,7 @@ agency_agents_df = agency_agents_df.merge(br_df[['BR_CODE','BR_NM']].drop_duplic
 col_list = ['agt_cd','tier','14m_per','no_sbw_completed','last_mth_pol','last_3m_pol','last_6m_pol','last_9m_pol','last_12m_pol','last_12m_ape','last_12m_prd']
 agent_merged_df = agency_agents_df.merge(latest_df[col_list].drop_duplicates(), left_on='agt_code', right_on='agt_cd', how='left')
 #agent_merged_df = agent_merged_df.rename(columns={'last_12m_ape': 'last_yr_ape'})
-agent_merged_df.shape
+print("Total contracted agents: ", agent_merged_df.shape[0])
 #agent_merged_df.dtypes
 
 # COMMAND ----------
@@ -106,23 +119,17 @@ agent_merged_df.shape
 # Define bins and labels for each column to be binned
 bins_labels = [
     # For 'agt_tenure_mths', create two categories: '<=1 year' and '>1 year'
-    ('agt_tenure_mths', [0, 12, float('inf')], ['<=1 year', '>1 year']),
-    
+    ('agt_tenure_mths', [0, 12, float('inf')], ['<=1 year', '>1 year']),    
     # For '14m_per', create two categories: '<=70%' and '70%+'
-    ('14m_per', [0, 0.7, 1], ['<=70%', '70%+']),
-    
+    ('14m_per', [0, 0.7, 1], ['<=70%', '70%+']),    
     # For 'last_12m_prd', create two categories: '<= 2 product types' and '> 2 product types'
-    ('last_12m_prd', [-1, 2, float('inf')], ['<=2 product types', '>2 product types']),
-    
+    ('last_12m_prd', [-1, 2, float('inf')], ['<=2 product types', '>2 product types']),    
     # For 'last_12m_ape', create four categories: '0-5000', '5000-7000', '7000-10000' and '10000+'
-    ('last_12m_ape', [0, 5000, 7000, 10000, float('inf')], ['<=5k', '5-7k', '7-10k', '10k+']),
-    
+    ('last_12m_ape', [0, 5000, 7000, 10000, float('inf')], ['<=5k', '5-7k', '7-10k', '10k+']),    
     # For '1yr_agent_activeness', create three categories: 'Low', 'Medium', and 'High'
-    ('1yr_agent_activeness', [0, 0.3, 0.6, 1], ['Low', 'Medium', 'High']),
-    
+    ('1yr_agent_activeness', [0, 0.3, 0.6, 1], ['Low', 'Medium', 'High']),    
     # For 'cus_existing', create two categories: '<= 2 customers' and '> 2 customers'
-    ('cus_existing', [0, 2, float('inf')], ['<=2 customers', '>2 customers']),
-    
+    ('cus_existing', [0, 2, float('inf')], ['<=2 customers', '>2 customers']),    
     # For 'no_sbw_completed', create two categories: 'No trainings completed' and 'at least 1 training completed'
     ('no_sbw_completed', [-1, 0, float('inf')], ['No trainings completed', 'at least 1 training completed'])
 ]
@@ -206,7 +213,7 @@ agent_merged_df['f_target_agent'] = np.where(
     (agent_merged_df['cus_existing_cat'] == '>2 customers') &
     (agent_merged_df['14m_per_cat'] == '70%+') #&  
     #(agent_merged_df['last_12m_prd_cat'] == '>2 product types') & # Remove this filter
-    ,#(agent_merged_df['manager_0_active']=='Active'), 
+    ,#(agent_merged_df['manager_0_active']=='Active'), # Remove this filter
     1, 
     0
 )
@@ -236,7 +243,6 @@ cus_df= spark.read.format("parquet").load(customer_path, header=True)
 policy_df = spark.read.parquet(policy_dm_path).alias('a').join(cus_seg_df.alias('b'), on='po_num')\
     .select('a.po_num', 'a.pol_eff_dt', 'a.sa_code')
     
-#window = Window.partitionBy('po_num').orderBy(desc('pol_eff_dt'))
 policy_df = policy_df.withColumn('rn', F.row_number().over(Window.partitionBy('po_num').orderBy(F.col('pol_eff_dt').desc())))
 policy_df = policy_df.filter(F.col('rn')==1).drop_duplicates().toPandas()
 #policy_df.shape
@@ -248,23 +254,42 @@ policy_df = policy_df.filter(F.col('rn')==1).drop_duplicates().toPandas()
 
 # COMMAND ----------
 
-cus_seg_df = cus_seg_df.toPandas()
-fil_cus_seg_df = cus_seg_df[(cus_seg_df['f_owner_is_agent']==0)
+#cus_seg_df = cus_seg_df.toPandas()
+
+# Exclude policy holders (PO) who are also agents
     #(cus_seg_df['decile'].isin([1,2])) & 
     #(cus_seg_df['protection_income_grp'].isin(['5. No dependent/Protection Pols','4. below 20% Income Protection', '3. 20% Income Protection'])) & 
     #(cus_seg_df['income_segment'].isin(['1 VIP', '2 HNW', '3 High Income', '4 Mid Income'])) &
     #(~cus_seg_df['segmentation_rules'].isin(['1.2.2 Term Only : No TROP','2.2.2 Term Only : No TROP', '1.2.1 Term Only : TROP']))
-    ]
+#fil_cus_seg_df = cus_seg_df[(cus_seg_df['f_owner_is_agent']==0)]
 
 # Get the list of these POs as filter
-fil_cus_list = fil_cus_seg_df['po_num'].unique().tolist()
+#fil_cus_list = fil_cus_seg_df['po_num'].unique().tolist()
+# //----- Ignore the above codes, rewrite as Spark -----//
+
+# Exclude policy holders (PO) who are also agents
+fil_cus_seg_df = cus_seg_df.filter(cus_seg_df['f_owner_is_agent'] == 0)
+
+# Get the list of unique POs as filter
+fil_cus_list = fil_cus_seg_df.select('po_num').distinct().rdd.map(lambda row: row.po_num).collect()
+
+# Select only columns needed
+cols = ['cli_num', 'cur_age', 'actvnes_stat', 'new_exist_stat', 'nat_code', 'occp_clas', 'no_dpnd', 'move_ind']
+
+# Filter cus_df based on cli_num and select required columns
+filtered_cus_df = cus_df.join(
+    fil_cus_seg_df.select("po_num"), 
+    cus_df["cli_num"] == fil_cus_seg_df["po_num"], 
+    how="inner"
+).select(*cols)
+
 #fil_cus_seg_df.shape
-print("Number of customers in-scope:", len(fil_cus_list))
+#print("Number of customers in-scope:", filtered_cus_df.count())
 
 # COMMAND ----------
 
-policy_fil_df = policy_df[policy_df['po_num'].isin(fil_cus_list)].drop_duplicates(subset=['po_num', 'sa_code'])[['po_num', 'sa_code']]
-#policy_fil_df.shape
+policy_fil_pd = policy_df[policy_df['po_num'].isin(fil_cus_list)].drop_duplicates(subset=['po_num', 'sa_code'])[['po_num', 'sa_code']]
+#policy_fil_pd.shape
 
 # COMMAND ----------
 
@@ -273,8 +298,8 @@ policy_fil_df = policy_df[policy_df['po_num'].isin(fil_cus_list)].drop_duplicate
 
 # COMMAND ----------
 
-# Merge agent_merged_df with policy_fil_df to get the agents serving the target customers
-merged_df = agent_merged_df.merge(policy_fil_df, how='inner', left_on='agt_code', right_on='sa_code')
+# Merge agent_merged_df with policy_fil_pd to get the agents serving the target customers
+merged_df = agent_merged_df.merge(policy_fil_pd, how='inner', left_on='agt_code', right_on='sa_code')
 
 # Calculate 'po_num_count' for each 'agt_code'
 po_num_count = merged_df.groupby('agt_code')['po_num'].nunique().reset_index()
@@ -285,7 +310,7 @@ agent_merged_df = agent_merged_df.merge(po_num_count, on='agt_code', how='inner'
 
 # Add 'in_scope' column based on the match between 'agt_code' and 'sa_code'
 agent_merged_df['in_scope'] = 0
-agent_merged_df.loc[agent_merged_df['agt_code'].isin(policy_fil_df['sa_code']), 'in_scope'] = 1
+agent_merged_df.loc[agent_merged_df['agt_code'].isin(policy_fil_pd['sa_code']), 'in_scope'] = 1
 agent_merged_df['in_scope'] = agent_merged_df['in_scope'].astype(int)
 
 agent_merged_df = agent_merged_df.copy()
@@ -295,7 +320,7 @@ conditions = [
     (agent_merged_df['last_3m_pol'] > 0),
     (agent_merged_df['last_6m_pol'] > 0),
     (agent_merged_df['last_9m_pol'] > 0),
-    (agent_merged_df['last_12m_pol'] >0)
+    (agent_merged_df['last_12m_pol'] > 0)
 ]
 
 choices = ['1mA', '3mA', '6mA', '9mA', '12mA']
@@ -306,11 +331,6 @@ agent_merged_df['last_pol_cat'] = np.select(conditions, choices, default='12m-In
 agent_inscope_df = agent_merged_df[agent_merged_df['in_scope']==1]
 
 print("Unique agents in-scope:", len(pd.unique(agent_inscope_df['agt_code'])))
-
-# COMMAND ----------
-
-agent_merged_df.to_csv(f'/dbfs/mnt/lab/vn/project/scratch/agent_activation/agent_merged_total.csv', header=True, index=False)
-#display(agent_inscope_df)
 
 # COMMAND ----------
 
@@ -351,7 +371,7 @@ conditions = [
     (inactive_agencts_df['cus_existing_cat'] == '>2 customers'),
     (inactive_agencts_df['14m_per_cat'] == '70%+'),
     #(inactive_agencts_df['last_yr_prd_cat'] == '>2 product types'), # Remove this filter
-    #(inactive_agencts_df['manager_0_active']=='Active')
+    #(inactive_agencts_df['manager_0_active']=='Active') # Remove this filter
 ]
 
 # Apply the conditions one by one and print the number of agents filtered out after each condition
@@ -391,15 +411,16 @@ print(target_agents.shape)
 pivot_df = target_agents.groupby(['agt_tenure_mths_cat','last_pol_cat','last_12m_ape_cat','cus_existing_cat','14m_per_cat',
                                         #'last_yr_prd_cat'
                                         ]).agg({'agt_code': 'nunique'}).reset_index()
-display(pivot_df)
+#display(pivot_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,Obsolete - Removed
 # Select only columns needed from the below list:
-cols=['cli_num','cur_age','actvnes_stat','new_exist_stat','nat_code','occp_clas','no_dpnd','move_ind']
-# Should only reload when there's update in the target customer segment
-filtered_cus_df = cus_df.filter(cus_df['cli_num'].isin(fil_cus_list)).select(*cols)
+#cols=['cli_num','cur_age','actvnes_stat','new_exist_stat','nat_code','occp_clas','no_dpnd','move_ind']
 
+# Should only reload when there's update in the target customer segment
+#filtered_cus_df = cus_df.filter(cus_df['cli_num'].isin(fil_cus_list)).select(*cols)
 
 # COMMAND ----------
 
@@ -408,7 +429,7 @@ filtered_cus_df = cus_df.filter(cus_df['cli_num'].isin(fil_cus_list)).select(*co
 
 # COMMAND ----------
 
-filtered_cus_df.coalesce(1).write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/agent_activation/filtered_cus_df/')
+filtered_cus_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/agent_activation/filtered_cus_df/')
 
 filtered_cus_pd = pd.read_parquet(f'/dbfs/mnt/lab/vn/project/scratch/agent_activation/filtered_cus_df/')
 
@@ -416,6 +437,7 @@ filtered_cus_pd = pd.read_parquet(f'/dbfs/mnt/lab/vn/project/scratch/agent_activ
 
 #filtered_cus_pd.to_parquet(f'/dbfs/mnt/lab/vn/project/scratch/agent_activation/filtered_cus.parquet', engine='pyarrow')
 #filtered_cus_pd = pd.read_parquet(f'/dbfs/mnt/lab/vn/project/scratch/agent_activation/filtered_cus.parquet')
+fil_cus_seg_pd = fil_cus_seg_df.toPandas()
 
 # COMMAND ----------
 
@@ -424,8 +446,8 @@ cols = ['po_num', 'min_prem_dur', 'first_pol_eff_dt', 'sex_code', 'client_tenure
         'protection_fa_imp', 'protection_fa_all_imp', 'f_with_dependent', 'protection_gap', 'protection_gap_all', 'wallet_rem', 'cur_age', 'actvnes_stat',
         'new_exist_stat', 'nat_code', 'occp_clas', 'no_dpnd', 'move_ind', 'sa_code' #, 'decile'
         ]
-cus_merged_df = fil_cus_seg_df.merge(filtered_cus_pd,left_on="po_num",right_on="cli_num",how="left") \
-                              .merge(policy_fil_df,on="po_num",how="left")
+cus_merged_df = fil_cus_seg_pd.merge(filtered_cus_pd,left_on="po_num",right_on="cli_num",how="left") \
+                              .merge(policy_fil_pd,on="po_num",how="left")
 
 cus_merged_df = cus_merged_df[cols]
 
@@ -439,8 +461,8 @@ cus_merged_df = cus_merged_df[cols]
 cus_agent_merged_df = cus_merged_df.merge(agent_merged_df, left_on='sa_code', right_on='agt_code', how='left')
 cus_agent_merged_df['image_date'] = cutoff_date
 print('# of unique inforce customers:', cus_agent_merged_df.shape[0])
-for col in cus_agent_merged_df.columns:
-    print(col)
+#for col in cus_agent_merged_df.columns:
+#    print(col)
 
 # COMMAND ----------
 
@@ -450,6 +472,7 @@ for col in cus_agent_merged_df.columns:
 # COMMAND ----------
 
 cus_agent_merged_df.to_parquet(f'{out_path}', partition_cols=['image_date'], engine='pyarrow')
+cus_agent_merged_df.shape
 
 # COMMAND ----------
 
@@ -463,7 +486,7 @@ cus_agent_merged_df.to_parquet(f'{out_path}', partition_cols=['image_date'], eng
 
 # COMMAND ----------
 
-# get the agent counts for MPro distribution
+# Get the agent counts for MPro distribution
 tier_counts = target_agents['tier'].value_counts().reset_index()
 tier_counts
 
@@ -678,6 +701,7 @@ plot_composition(inactive_cus_agents_df, 'city_grouped', "Grouped city compositi
 
 # COMMAND ----------
 
+comment_out = '''
 from pyspark.sql import SparkSession
 from pyspark.ml.stat import Correlation
 from pyspark.ml.linalg import Vectors
@@ -690,6 +714,8 @@ active_agt_list = merged_df.filter(F.col('f_target_agent') == 1)\
                     .select('agt_cd').distinct().rdd.flatMap(lambda x: x).collect()
 print('# of agents:', len(active_agt_list))
 
+'''
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -697,6 +723,7 @@ print('# of agents:', len(active_agt_list))
 
 # COMMAND ----------
 
+comment_out = '''
 # Add a column to convert agent's tier to numeric (1-7)
 merged_df = merged_df.withColumn(
     "f_current_tier",
@@ -713,8 +740,11 @@ merged_df = merged_df.withColumn(
     (F.col('agt_total_ape')/23.145).cast('float')
     ).toPandas()
 
+'''
+
 # COMMAND ----------
 
+comment_out = '''
 merged_pd = merged_df
 
 f_cols = ["segment", "agent_tier", "br_nm", "agt_tenure_mths_cat", "cus_existing_cat", "last_12m_ape_cat", "14m_per_cat", "agt_cd",
@@ -780,9 +810,11 @@ def assign_segment(row):
 # Apply the function to the DataFrame
 merged_pd["segment"] = merged_pd[n_cols].apply(assign_segment, axis=1)
 
+'''
 
 # COMMAND ----------
 
+comment_out = '''
 bins_labels = [
     ('1yr_agent_activeness', [0, 0.3, 0.6, 0.9, float('inf')], 
      ['9m+', '6-9m', '3-6m', '<3m']),
@@ -795,8 +827,11 @@ bins_labels = [
 for column, bins, labels in bins_labels:
     create_categorical(merged_pd, column, bins, labels)
 
+'''
+
 # COMMAND ----------
 
+comment_out = '''
 # Rank the segments
 ranked_agents = merged_pd[f_cols].sort_values(by="segment", ascending=False).drop_duplicates()
 
@@ -804,8 +839,10 @@ ranked_agents = merged_pd[f_cols].sort_values(by="segment", ascending=False).dro
 for group in group_nm:
     df = ranked_agents[ranked_agents['segment'] == group]
     n_agt_list = df['agt_cd'].nunique()
-    print(f"This is what the {n_agt_list} of {group} looks like:")
+    print(f"This is what the {n_agt_list} of {group} looks like: \n")
     calculate_summary_stats(df, n_cols)
+
+'''
 
 # COMMAND ----------
 
@@ -815,10 +852,10 @@ for group in group_nm:
 # COMMAND ----------
 
 # Save raw data for future analysis
-merged_pd.drop(columns=['__index_level_0__','f_current_tier'], inplace=True)
+#merged_pd.drop(columns=['__index_level_0__','f_current_tier'], inplace=True)
 #merged_pd.to_csv(f'{out_path}merged_segmentations.csv', header=True, index=False)
-ranked_agents.to_csv(f'{out_path}ranked_agents.csv', header=True, index=False)
+#ranked_agents.to_csv(f'{out_path}ranked_agents.csv', header=True, index=False)
 
 # COMMAND ----------
 
-print(ranked_agents.dtypes)
+#print(ranked_agents.dtypes)

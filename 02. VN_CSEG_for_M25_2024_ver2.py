@@ -4,6 +4,13 @@
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC # Make sure 01. VN_Agency_Segmentation_Xtra has already been run
+# MAGIC
+# MAGIC <strong>https://adb-2294815648411921.1.azuredatabricks.net/?o=2294815648411921#notebook/2953232491265740/command/429099654769368
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC # 1. Initialization
 
 # COMMAND ----------
@@ -26,7 +33,19 @@ pd.set_option('display.max_columns', 200)
 
 # COMMAND ----------
 
-image_date = '2024-05-31'
+x = 0 # Change x to the number of months before last month-end
+
+# Calculate the last month-end
+current_date = pd.Timestamp.now()
+
+# Move to the first day of the current month
+first_day_of_current_month = current_date.replace(day=1)
+
+# Move back x months from the first day of the current month, then subtract one day to get the last day of the previous month
+first_day_of_target_month = first_day_of_current_month - pd.DateOffset(months=x)
+last_month_end = first_day_of_target_month - pd.DateOffset(days=1)
+
+image_date = last_month_end.strftime('%Y-%m-%d')
 image_date_sht = image_date[:7].replace('-', '')
 image_year = int(image_date[:4])
 #ex_rate = 23.145
@@ -39,7 +58,22 @@ policy_path = f'/mnt/prod/Curated/VN/Master/VN_CURATED_DATAMART_DB/TPOLIDM_MTHEN
 claim_path = f'/mnt/prod/Published/VN/Master/VN_PUBLISHED_CASM_CAS_SNAPSHOT_DB/TCLAIM_DETAILS/image_date={image_date}'
 out_path = '/dbfs/mnt/lab/vn/project/scratch/agent_activation/'
 
-print(image_date, image_date_sht, image_year)
+# Retrieving latest exchange rate (for VND to USD conversion)
+exrt_string = f'''
+with xrt as (
+select  cast(XCHNG_RATE as int) ex_rate,
+        row_number() over (partition by XCHNG_RATE_TYP order by FR_EFF_DT DESC) rn
+from    vn_published_cas_db.texchange_rates
+where   XCHNG_RATE_TYP='U'
+    and FR_CRCY_CODE='78'
+    and to_date(FR_EFF_DT) <= '{image_date}'
+qualify rn=1
+) select ex_rate from xrt
+'''
+exrt_df = sql_to_df(exrt_string, 1, spark)
+ex_rate = exrt_df.collect()[0][0]
+
+print(image_date, image_date_sht, image_year, ex_rate)
 
 # COMMAND ----------
 
@@ -79,58 +113,73 @@ print('# customers excl. 0 APE:', target_activation_pd.shape[0])
 # COMMAND ----------
 
 # Temporarily add the 'total_ape' for selling agents until it's added to the Agent Segmentation
-policy_df = spark.read.parquet(policy_path).filter((F.col('pol_stat_cd').isin(['A','N','R'])) == False)
+policy_df = spark.read.parquet(policy_path).filter(~F.col('pol_stat_cd').isin(['A','N','R']))
 
-agt_tot_ape_df = policy_df.groupby('wa_code')\
-    .agg(
-        F.sum(F.when(F.col('POL_EFF_DT') <= image_date, F.col('TOT_APE')/23.145)).cast('float').alias('agt_total_ape')
-    ).toPandas().drop_duplicates()
+agt_tot_ape_df = policy_df.groupby('wa_code').agg(
+    (F.sum(F.when(F.col('POL_EFF_DT') <= image_date, F.col('TOT_APE') / ex_rate)).cast('float')).alias('agt_total_ape')
+).dropDuplicates()
 
 # COMMAND ----------
 
-# Temporarily add the 'claim_6m_cnt' and 'claim_6m_amt' for customers until they're added to the Customer Segmentations
-claim_df = spark.read.parquet(claim_path) \
-.filter(
-    (F.months_between(F.col('CLM_APROV_DT'), F.add_months(F.to_date(F.lit(image_date), 'yyyy-MM-dd'), -6)) <= 6) &
-    (F.col('CLM_APROV_DT') <= F.to_date(F.lit(image_date), 'yyyy-MM-dd')) &
-    (F.col('CLM_STAT_CODE').isin(['A'])) &
+# Add the claim counts and amounts for both 6-month and 12-month periods
+image_date_col = F.to_date(F.lit(image_date), 'yyyy-MM-dd')
+six_months_ago = F.add_months(image_date_col, -6)
+twelve_months_ago = F.add_months(image_date_col, -12)
+
+# Read the base claim data
+base_claim_df = spark.read.parquet(claim_path).filter(
+    (F.col('CLM_APROV_DT') <= image_date_col) &
+    (F.col('CLM_STAT_CODE') == 'A') &
     (F.col('CLM_CODE').isin([3, 7, 9, 11, 27, 28, 29, 36, 38, 50, 51]))
 ).select('POL_NUM', 'CLM_ID', 'CLM_APROV_AMT', 'CLM_APROV_DT')
-    
+
 # Add columns for the last claim date and amount
 window_spec = Window.partitionBy('POL_NUM').orderBy(F.col('CLM_APROV_DT').desc())
+base_claim_df = base_claim_df.withColumn('clm_lst_dt', F.first('CLM_APROV_DT').over(window_spec)) \
+                          .withColumn('clm_lst_amt', F.first('CLM_APROV_AMT').over(window_spec))
 
-claim_df = claim_df.withColumn('clm_lst_dt', F.first(F.col('CLM_APROV_DT')).over(window_spec)) \
-                   .withColumn('clm_lst_amt', F.first(F.col('CLM_APROV_AMT')).over(window_spec))
+# Filter for 6-month period
+claim_6m_df = base_claim_df.filter(F.col('CLM_APROV_DT') >= six_months_ago).groupby('POL_NUM').agg(
+    F.count('CLM_ID').cast('int').alias('claim_6m_cnt'),
+    F.sum('CLM_APROV_AMT').cast('float').alias('claim_6m_amt')
+)
 
-# Perform the aggregation and join
-claim_df = claim_df.groupby('POL_NUM')\
-    .agg(
-        F.count('CLM_ID').cast('int').alias('claim_6m_cnt'),
-        F.sum('CLM_APROV_AMT').cast('float').alias('claim_6m_amt'),
-        F.max('clm_lst_dt').cast('date').alias('clm_lst_dt'),
-        F.first('clm_lst_amt').cast('float').alias('clm_lst_amt')
-    )
+# Filter for 12-month period
+claim_12m_df = base_claim_df.filter(F.col('CLM_APROV_DT') >= twelve_months_ago).groupby('POL_NUM').agg(
+    F.count('CLM_ID').cast('int').alias('claim_12m_cnt'),
+    F.sum('CLM_APROV_AMT').cast('float').alias('claim_12m_amt')
+)
 
-# Lowercase all column names in the DataFrame
-for col in claim_df.columns:
-    claim_df = claim_df.withColumnRenamed(col, col.lower())
-#print(claim_df.count())
+# Get the last claim info for all claims
+claim_last_df = base_claim_df.groupby('POL_NUM').agg(
+    F.max('clm_lst_dt').cast('date').alias('clm_lst_dt'),
+    F.first('clm_lst_amt').cast('float').alias('clm_lst_amt')
+)
+
+# Join all the claim dataframes
+claim_df = claim_last_df.join(claim_6m_df, 'POL_NUM', 'left') \
+                        .join(claim_12m_df, 'POL_NUM', 'left')
+
+# Fill nulls with zeros for count and amount columns
+claim_df = claim_df.na.fill(0, ['claim_6m_cnt', 'claim_6m_amt', 'claim_12m_cnt', 'claim_12m_amt'])
+
+# Convert column names to lowercase
+claim_df = claim_df.select([F.col(column).alias(column.lower()) for column in claim_df.columns])
 
 # COMMAND ----------
 
-claim_po_df = policy_df.join(claim_df, on='pol_num')\
-    .groupby('po_num')\
-    .agg(
-        F.sum(F.col('claim_6m_cnt')).cast('int').alias('clm_6m_cnt'),
-        (F.sum(F.col('claim_6m_amt')/23.145)).cast('float').alias('clm_6m_amt'),
-        F.max('clm_lst_dt').cast('date').alias('clm_lst_dt'),
-        F.first('clm_lst_amt').cast('float').alias('clm_lst_amt')
-    ).dropDuplicates()
-    
+claim_po_df = policy_df.join(F.broadcast(claim_df), on='pol_num').groupby('po_num').agg(
+    F.sum('claim_6m_cnt').cast('int').alias('clm_6m_cnt'),
+    (F.sum('claim_6m_amt') / ex_rate).cast('float').alias('clm_6m_amt'),
+    F.sum('claim_12m_cnt').cast('int').alias('clm_12m_cnt'),
+    (F.sum('claim_12m_amt') / ex_rate).cast('float').alias('clm_12m_amt'),
+    F.max('clm_lst_dt').cast('date').alias('clm_lst_dt'),
+    F.first('clm_lst_amt').cast('float').alias('clm_lst_amt')
+).dropDuplicates()
+
 claim_po_pd = claim_po_df.toPandas()
 
-print(claim_po_pd.shape)
+# print(claim_po_pd.shape)
 
 # COMMAND ----------
 
@@ -191,6 +240,8 @@ except Exception as e:
 
 # COMMAND ----------
 
+agt_tot_ape_pd = agt_tot_ape_df.toPandas()
+
 mclass_cols = ['po_num','rep_purchase_comb_health_base_PREDICTION','rep_purchase_comb_health_rider_PREDICTION', 'rep_purchase_comb_inv_base_PREDICTION','rep_purchase_comb_riders_PREDICTION','rep_purchase_comb_term_base_PREDICTION', 'rep_purchase_comb_PREDICTION'
                ]
 
@@ -205,7 +256,7 @@ merged_target_activation_df = target_activation_pd\
   .merge(mclass_df[mclass_cols], on='po_num', how='left')\
   .merge(claim_po_pd, on='po_num', how='left')\
   .merge(aseg_df[aseg_cols], left_on='agt_code', right_on='agt_cd', how='left')\
-  .merge(agt_tot_ape_df, left_on='agt_code', right_on='wa_code', how='left')
+  .merge(agt_tot_ape_pd, left_on='agt_code', right_on='wa_code', how='left')
 
 merged_target_activation_df.columns = map(str.lower, merged_target_activation_df.columns)
 
@@ -218,6 +269,7 @@ for col in numeric_columns:
 
 # Add 6m claim over APE ratio column
 merged_target_activation_df['clm_6m_ratio'] = merged_target_activation_df['clm_6m_amt']*100 / merged_target_activation_df['total_ape'].round(4)
+merged_target_activation_df['clm_12m_ratio'] = merged_target_activation_df['clm_12m_amt']*100 / merged_target_activation_df['total_ape'].round(4)
 
 # Fill NaN with N/A for category and other object/string columns
 categorical_columns = merged_target_activation_df.select_dtypes(include=['category']).columns
@@ -279,6 +331,10 @@ bins_labels = [
      ['0', '1', '2', '3-4', '5+']),
     ('clm_6m_ratio', [0, 0.25, 0.5, 0.75, np.inf],
      ['<= 25%', '<= 50%', '<=75%', '>75%']),
+    ('clm_12m_cnt', [0, 0.1, 1, 2, 4, np.inf],
+     ['0', '1', '2', '3-4', '5+']),
+    ('clm_12m_ratio', [0, 0.25, 0.5, 0.75, np.inf],
+     ['<= 25%', '<= 50%', '<=75%', '>75%']),
     ('ins_typ_count', [0, 1, 2, np.inf],
      ['1', '2', '2+']),
     # Add new features
@@ -338,8 +394,7 @@ add_group_column(merged_target_activation_df, group_conditions, group_choices, '
 # COMMAND ----------
 
 # Save raw data for future analysis
-merged_target_activation_df.to_parquet(f'{out_path}merged_target_activation.parquet', engine='pyarrow')
-#merged_target_activation_df.to_csv(f'{out_path}merged_target_activation.csv', header=True, index=False)
+merged_target_activation_df.to_parquet(f'{out_path}merged_target_activation{image_date_sht}.parquet', engine='pyarrow')
 
 # COMMAND ----------
 
@@ -354,9 +409,9 @@ merged_target_activation_pd.shape
 
 # COMMAND ----------
 
-# Remove unassigned customers from analysis
-nonucm_target_activation_df = merged_target_activation_pd[merged_target_activation_pd['unassigned_ind']==0]
-nonucm_target_activation_df.shape
+# # Remove unassigned customers from analysis
+# nonucm_target_activation_df = merged_target_activation_pd[merged_target_activation_pd['unassigned_ind']==0]
+# nonucm_target_activation_df.shape
 
 # COMMAND ----------
 
@@ -454,12 +509,12 @@ columns_of_interest = ['cur_age', 'adj_mthly_incm', 'no_dpnd', 'ins_typ_count', 
 
 # COMMAND ----------
 
-group1 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['2. Married', '3. Unknown']) &
-                                     nonucm_target_activation_df['no_dpnd_cat'].isin(['2','3+'])]
+# group1 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['2. Married', '3. Unknown']) &
+#                                      nonucm_target_activation_df['no_dpnd_cat'].isin(['2','3+'])]
 
-print('# customers in group:', group1.shape[0])
+# print('# customers in group:', group1.shape[0])
 
-calculate_summary_stats(group1, columns_of_interest)
+# calculate_summary_stats(group1, columns_of_interest)
 
 # COMMAND ----------
 
@@ -468,12 +523,12 @@ calculate_summary_stats(group1, columns_of_interest)
 
 # COMMAND ----------
 
-group2 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['1. Married w/ kids']) &
-                                     nonucm_target_activation_df['no_dpnd_cat'].isin(['1','2','3+'])]
+# group2 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['1. Married w/ kids']) &
+#                                      nonucm_target_activation_df['no_dpnd_cat'].isin(['1','2','3+'])]
 
-print('# customers in group:', group2.shape[0])
+# print('# customers in group:', group2.shape[0])
 
-calculate_summary_stats(group2, columns_of_interest)
+# calculate_summary_stats(group2, columns_of_interest)
 
 # COMMAND ----------
 
@@ -482,12 +537,12 @@ calculate_summary_stats(group2, columns_of_interest)
 
 # COMMAND ----------
 
-group3 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['2. Married', '3. Unknown']) &
-                                     nonucm_target_activation_df['no_dpnd_cat'].isin(['1'])]
+# group3 = nonucm_target_activation_df[nonucm_target_activation_df['mar_stat_cat'].isin(['2. Married', '3. Unknown']) &
+#                                      nonucm_target_activation_df['no_dpnd_cat'].isin(['1'])]
 
-print('# customers in group:', group3.shape[0])
+# print('# customers in group:', group3.shape[0])
 
-calculate_summary_stats(group3, columns_of_interest)
+# calculate_summary_stats(group3, columns_of_interest)
 
 # COMMAND ----------
 
@@ -496,8 +551,8 @@ calculate_summary_stats(group3, columns_of_interest)
 
 # COMMAND ----------
 
-group4 = nonucm_target_activation_df[nonucm_target_activation_df['no_dpnd_cat']=='0']
+# group4 = nonucm_target_activation_df[nonucm_target_activation_df['no_dpnd_cat']=='0']
 
-print('# customers in group:', group4.shape[0])
+# print('# customers in group:', group4.shape[0])
 
-calculate_summary_stats(group4, columns_of_interest)
+# calculate_summary_stats(group4, columns_of_interest)

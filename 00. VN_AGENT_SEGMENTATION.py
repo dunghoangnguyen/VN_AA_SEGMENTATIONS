@@ -4,6 +4,14 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Make sure the 2 files are updated and available:
+# MAGIC
+# MAGIC 1. /lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet
+# MAGIC 2. /lab/vn/project/scratch/gen_rep_2023/prod_existing/11_multiclass_scored_base/multiclass_scored_base_yyyymm.csv
+
+# COMMAND ----------
+
 # MAGIC %run /Repos/dung_nguyen_hoang@mfcgd.com/Utilities/Functions
 
 # COMMAND ----------
@@ -13,6 +21,7 @@ import pyspark.sql.types as T
 from pyspark.sql import Window
 import numpy as np
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 
 pd.set_option('display.float_format', lambda x: '%.2f' % x)
@@ -26,16 +35,19 @@ pd.set_option('display.max_columns', 200)
 
 # COMMAND ----------
 
-# Get the current date
-current_date = pd.Timestamp.now()
+# Set the number of months going backward
+x = 0  # Replace 0 with the desired number of months (0 being the last month-end)
 
 # Calculate the last month-end
+current_date = pd.Timestamp.now()
 last_month_end = current_date - pd.DateOffset(days=current_date.day)
+last_month_end = last_month_end - pd.DateOffset(months=x)
+last_month_end = last_month_end + pd.offsets.MonthEnd(0)
 max_date = last_month_end
 max_date_str = last_month_end.strftime('%Y-%m-%d')
 
-# Calculate the last month end
-last_month = pd.to_datetime(max_date) - pd.DateOffset(days=max_date.day)
+# Calculate the last month end based on the value of x
+last_month = last_month_end - pd.DateOffset(months=1) + pd.offsets.MonthEnd(0)
 min_last_mth = (last_month + pd.offsets.MonthEnd(0)).strftime('%Y-%m-%d')
 
 # Calculate the month-end of 3 months ago
@@ -66,12 +78,12 @@ manupro_level = ('S','G','P')
 # Convert yyyymmdd_MDRT_list.xlsx into vn_mdrt_yyyymmdd.csv and upload to DBx hive_metastore/default
 path_mdrt = 'vn_mdrt_20230920'
 # Convert yyyymmdd_Platinum_list.xlsx into vn_mp_yyyymm.csv and upload to DBx hive_metastore/default
-path_manupro = 'vn_mp_' + snapshot
+#path_manupro = 'vn_mp_' + snapshot
 
 # model output tables, change the date and data availability
-multiclass_path = '/dbfs/mnt/lab/vn/project/scratch/gen_rep_2023/prod_existing/11_multiclass_scored_base/multiclass_scored_' + snapshot + '.csv'
-leads_model_path = '/dbfs/mnt/prod/vn/project/scratch/gen_rep_2023/prod_existing/8_model_score_existing/'
-lapse_path = '/dbfs/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet/'
+#multiclass_path = '/dbfs/mnt/lab/vn/project/scratch/gen_rep_2023/prod_existing/11_multiclass_scored_base/multiclass_scored_' + snapshot + '.csv'
+#leads_model_path = '/dbfs/mnt/prod/vn/project/scratch/gen_rep_2023/prod_existing/8_model_score_existing/'
+#lapse_path = '/dbfs/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet/'
 
 # pre_lapse_revamp_path = '/dbfs/mnt/lab/vn/project/lapse/pre_lapse_revamp_3/snapshots/snapshots_202309/'
 
@@ -79,13 +91,12 @@ lapse_path = '/dbfs/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/la
 mp_link_url = 'https://manulife-mba.axonify.com/training/index.html#hub/search/community-1535/articles/1'
 
 #2024 MDRT requirment
-ape_benchmark = dict({'Silver': 60000.000, 'Gold': 360000.000, 'Platinum': 600000.000, 'MDRT': 721626.600, 'COT': 2164879.800, 'TOT': 4329759.600, '^.^': 4329759.600})
+ape_benchmark = dict({'Silver': 60000.000, 'Gold': 360000.000, 'Platinum': 600000.000, 'MDRT': 933604.600, 'COT': 2800813.800, 'TOT': 5601627.600, '^.^': 4329759.600})
 
 # output files to
 out_path = '/dbfs/mnt/lab/vn/project/cpm/datamarts/'
 dm_path = '/mnt/prod/Curated/VN/Master/VN_CURATED_DATAMART_DB/'
 ams_path = '/mnt/prod/Published/VN/Master/VN_PUBLISHED_CASM_AMS_SNAPSHOT_DB/'
-#bak_path = '/mnt/prod/Published/VN/Master/VN_PUBLISHED_AMS_BAK_DB/'
 cas_path = '/mnt/prod/Published/VN/Master/VN_PUBLISHED_CASM_CAS_SNAPSHOT_DB/'
 alt_path = '/mnt/prod/Curated/VN/Master/VN_CURATED_ANALYTICS_DB/'
 cpm_path = '/mnt/prod/Curated/VN/Master/VN_CURATED_CAMPAIGN_DB/'
@@ -93,13 +104,13 @@ nbv_path = '/mnt/prod/Published/VN/Master/VN_PUBLISHED_CAMPAIGN_FILEBASED_DB/'
 gen_path = '/mnt/prod/Curated/VN/Master/VN_CURATED_CUSTOMER_ANALYTICS_DB/'
 mod_path = '/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/'
 
-tbl_src1 = 'TAGTDM_MTHEND/'
+tbl_src1 = 'TAGTDM_MTHEND/'  # Change respectively
 #tbl_src2 = 'TAMS_CANDIDATES/'
 #tbl_src3 = 'tams_locations/'
 #tbl_src4 = 'TAMS_AGENTS/'
 tbl_src5 = 'AGENT_RFM/'
-tbl_src6 = 'tpolidm_MTHEND/'
-tbl_src7 = 'tcoverages/'
+tbl_src6 = 'TPOLIDM_MTHEND/'
+tbl_src7 = 'TCOVERAGES/'            # Change respectively
 tbl_src8 = 'nbv_margin_histories/'
 tbl_src9 = 'TCLIENT_DETAILS/'
 tbl_src10 = 'vn_plan_code_map/'
@@ -108,6 +119,15 @@ tbl_src12 = 'TPLANS/'
 tbl_src13 = 'TAMS_AGT_ACUMS_BK/'
 tbl_src14 = 'lapse_score.parquet/'
 tbl_src15 = 'EXISTING_CUSTOMER_SCORE/'
+
+# Conditional modifications based on the year of max_date
+if max_date < pd.Timestamp('2023-11-30'):
+    tbl_src1 = 'TAGTDM_MTHEND_backup'
+    if max_date.year < 2023:
+        tbl_src7 = 'TCOVERAGES_HISTORY/'
+        tbl_src9 = 'TCLIENT_DETAILS_HISTORY/'
+        tbl_src11 = 'tclaim_details_HISTORY/'
+        tbl_src12 = 'TPLANS_HISTORY/'
 
 path_list = [dm_path, ams_path, alt_path,
              cas_path, cpm_path, #bak_path,
@@ -133,8 +153,23 @@ df_list = load_parquet_files(path_list, tbl_list)
 
 # COMMAND ----------
 
-# Select data from snapshot month
-#df_list['TAGTDM_MTHEND']    = df_list.pop('TAGTDM_MTHEND_backup')
+# Select data from snapshot month and properly rename them
+if max_date < pd.Timestamp('2023-11-30'):
+    df_list['TAGTDM_MTHEND']    = df_list.pop('TAGTDM_MTHEND_backup')
+    if max_date.year < 2023:
+        df_list['TCOVERAGES']       = df_list.pop('TCOVERAGES_HISTORY')
+        df_list['TCLIENT_DETAILS']  = df_list.pop('TCLIENT_DETAILS_HISTORY')
+        df_list['TCLAIM_DETAILS']   = df_list.pop('TCLAIM_DETAILS_HISTORY')
+        df_list['TPLANS']           = df_list.pop('TPLANS_HISTORY')
+
+# Check if the column 'mpro_title' exists in the dataframe
+if 'mpro_title' not in df_list['TAGTDM_MTHEND'].columns:
+    # Add missing columns with null values
+    df_list['TAGTDM_MTHEND'] = df_list['TAGTDM_MTHEND'].withColumn('mpro_title', F.lit(None))
+    df_list['TAGTDM_MTHEND'] = df_list['TAGTDM_MTHEND'].withColumn('mpro_title_eff_dt', F.lit(None))
+    df_list['TAGTDM_MTHEND'] = df_list['TAGTDM_MTHEND'].withColumn('mpro_title_pending_eff_dt', F.lit(None))
+    df_list['TAGTDM_MTHEND'] = df_list['TAGTDM_MTHEND'].withColumn('mpro_termination_dt', F.lit(None))
+
 df_list['TAGTDM_MTHEND']    = df_list['TAGTDM_MTHEND'][df_list['TAGTDM_MTHEND']['image_date'] == max_date_str]
 df_list['TPOLIDM_MTHEND']   = df_list['TPOLIDM_MTHEND'][df_list['TPOLIDM_MTHEND']['image_date'] == max_date_str]
 df_list['TCOVERAGES']       = df_list['TCOVERAGES'][df_list['TCOVERAGES']['image_date'] == max_date_str]
@@ -165,12 +200,117 @@ generate_temp_view(df_list)
 
 # COMMAND ----------
 
-multiclass = pd.read_csv(multiclass_path) # new file for csv every month
-lapse = spark.read.parquet('/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet/') \
-        .filter(F.col('month_snapshot') == snapshot).toPandas()
-leads_existing_model = df_list['leads_existing_model'].filter(F.col('image_date') == max_date_str).toPandas()
-print("No of leads from HP model: ", leads_existing_model.shape[0])
-print("No of policies from lapse model: ", lapse.shape[0])
+#multiclass = pd.read_csv(multiclass_path) # new file for csv every month
+#lapse = spark.read.parquet('/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet/') \
+#        .filter(F.col('month_snapshot') == snapshot).toPandas()
+#leads_existing_model = df_list['leads_existing_model'].filter(F.col('image_date') == max_date_str).toPandas()
+
+def get_multiclass_data(snapshot):
+    base_dir = '/dbfs/mnt/lab/vn/project/scratch/gen_rep_2023/prod_existing/11_multiclass_scored_base/'
+    # Alternative base_dir (commented out)
+    # base_dir = '/dbfs/mnt/lab/vn/project/scratch/adhoc/MULTICLASS/Scores/'
+    
+    # List all files in the directory
+    all_files = os.listdir(base_dir)
+    
+    # Extract snapshot dates from filenames
+    available_snapshots = []
+    for filename in all_files:
+        if filename.startswith('multiclass_scored_') and filename.endswith('.csv'):
+            snapshot_str = filename[len('multiclass_scored_'):-len('.csv')]
+            try:
+                datetime.strptime(snapshot_str, '%Y%m')
+                available_snapshots.append(snapshot_str)
+            except ValueError:
+                pass
+    
+    # Sort snapshots in descending order
+    available_snapshots.sort(reverse=True)
+    
+    if not available_snapshots:
+        print('No available snapshots found for multiclass.')
+        return None
+    
+    # If the provided snapshot is not in available_snapshots, start with the highest available snapshot
+    if snapshot not in available_snapshots:
+        print(f'Snapshot {snapshot} not found in available snapshots. Starting with the highest available snapshot.')
+        snapshot = available_snapshots[0]
+
+    while True:
+        if snapshot in available_snapshots:
+            multiclass_path = os.path.join(base_dir, f'multiclass_scored_{snapshot}.csv')
+            try:
+                multiclass = pd.read_csv(multiclass_path)
+                if not multiclass.empty:
+                    print(f'Found multiclass in {snapshot} snapshot.')
+                    return multiclass
+            except FileNotFoundError:
+                print(f'{multiclass_path[86:]} is not found!')
+        
+        # Move to the next available snapshot in the sorted list
+        try:
+            current_index = available_snapshots.index(snapshot)
+            if current_index + 1 < len(available_snapshots):
+                snapshot = available_snapshots[current_index + 1]
+            else:
+                print(f'No multiclass data found for snapshot {snapshot}.')
+                return None
+        except ValueError:
+            print(f'Snapshot {snapshot} not found in available snapshots.')
+            return None
+
+def get_leads_existing_model_data(max_date_str):
+    # Load the entire dataframe without filtering
+    leads_all = df_list['leads_existing_model']
+    
+    while True:
+        # Filter the dataframe based on the max_date_str
+        leads_existing_model = leads_all.filter(F.col('image_date') == max_date_str).toPandas()
+        
+        if not leads_existing_model.empty:
+            print(f'Found HP leads in {max_date_str} snapshot.')
+            return leads_existing_model
+
+        # Get the maximum value of image_date
+        max_date = leads_all.agg(F.max('image_date')).collect()[0][0].strftime('%Y-%m-%d')
+        
+        if max_date_str == max_date:
+            print(f'No leads data found for snapshot {max_date_str}.')
+            return None
+        
+        # Update max_date_str to the maximum date
+        max_date_str = max_date
+
+def get_lapse_data(snapshot):
+    # Read the parquet file without filtering
+    lapse_all = spark.read.parquet('/mnt/lab/vn/project/lapse/pre_lapse_deployment/lapse_mthly/lapse_score.parquet/')
+    
+    while True:
+        # Filter the dataframe based on the snapshot
+        lapse = lapse_all.filter(F.col('month_snapshot') == snapshot).toPandas()
+        
+        if not lapse.empty:
+            print(f'Found lapse in {snapshot} snapshot.')
+            return lapse
+
+        # Get the maximum value of month_snapshot
+        max_date = lapse_all.agg(F.max('month_snapshot')).collect()[0][0]
+        
+        if snapshot == max_date:
+            print(f'No lapse data found for snapshot {snapshot}.')
+            return None
+        
+        # Update snapshot to the maximum date
+        snapshot = max_date
+
+# Call the functions to load the data with individual fallbacks
+multiclass = get_multiclass_data(snapshot)
+leads_existing_model = get_leads_existing_model_data(max_date_str)
+lapse = get_lapse_data(snapshot)
+
+print("No of leads from Multiclass model: ", multiclass.shape[0])
+print("No of leads from Propensity model: ", leads_existing_model.shape[0])
+print("No of policies from Lapse model: ", lapse.shape[0])
 #leads_existing_model.head(2)
 
 # COMMAND ----------
@@ -182,7 +322,7 @@ print("No of policies from lapse model: ", lapse.shape[0])
 
 sql_string = '''
 select * 
-from {0} 
+from hive_metastore.vn_aa_reports.{0} 
 ;
 '''.format(path_mdrt)
 mdrt = sql_to_df(sql_string, 1, spark)
@@ -216,7 +356,7 @@ select distinct
             when 'P' then 'Platinum'
         end as mpro_title,
         mpro_title_eff_dt, mpro_title_pending_eff_dt, mpro_termination_dt, mar_stat_cd, ins_exp_ind,
-        nvl(mdrt.` Ranking `,
+        nvl(mdrt.`Ranking`,
             nvl(case mpro_title
                     when 'S' then 'Silver'
                     when 'G' then 'Gold'
@@ -325,7 +465,7 @@ where   agt.agt_code is not null
     or  cvg_eff_dt > '{1}';
 '''.format(max_date_str, min_last_mth)
 master_df = sql_to_df(sql_string, 1, spark)
-print("No coverages selected: ", master_df.count())
+#print("No coverages selected: ", master_df.count())
 #print("No null 'agt_join_dt': ", master_df.filter(F.col('agt_join_dt').isNull()).count())
 
 # Convert all DecimalType columns to FloatType
@@ -361,7 +501,7 @@ where   to_date(clm_recv_dt) < '{0}'
     and to_date(clm_aprov_dt) < '{0}';
 '''.format(snapshot)
 tclaim_df = sql_to_df(sql_string, 1, spark)
-print("No claims selected: ", tclaim_df.count())
+#print("No claims selected: ", tclaim_df.count())
 # Convert all DecimalType columns to FloatType
 decimal_columns = [col.name for col in tclaim_df.schema.fields if isinstance(col.dataType, T.DecimalType)]
 
@@ -379,7 +519,7 @@ and acum_cd = 'A214'
 ;
 '''.format(snapshot)
 m19_per_vn = spark.sql(query)
-print("No agents with 19m per: ", m19_per_vn.count())
+#print("No agents with 19m per: ", m19_per_vn.count())
 
 # COMMAND ----------
 
@@ -388,11 +528,12 @@ print("No agents with 19m per: ", m19_per_vn.count())
 
 # COMMAND ----------
 
-master_df = master_df.join(m19_per_vn, on='wa_cd_1', how='left')
+master_df = master_df.join(F.broadcast(m19_per_vn), on='wa_cd_1', how='left')
 # write the master Spark dataframe to csv/parquet
-master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
+#master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
 # Reload the master dataset
-master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
+#master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
+master_df.cache()
 
 # COMMAND ----------
 
@@ -438,7 +579,7 @@ master_df = master_df.withColumn("adjust_ape",
                              .otherwise(F.col("cvg_prem")*0.1)).cast('float'))
 
 master_df = master_df.fillna(value=0, subset=["adjust_ape"])
-master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
+#master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
@@ -459,9 +600,9 @@ master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 # COMMAND ----------
 
 # write the master Spark dataframe to csv/parquet
-master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
+#master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
 # Reload the master dataset
-master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
+#master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
 
 # COMMAND ----------
 
@@ -527,15 +668,7 @@ master_df = master_df.drop('cvg_eff_month', 'max_month')
 master_df = master_df.filter((F.col('max_date') >= F.col('cvg_eff_dt')) & (F.col('max_date') >= F.col('pol_eff_dt')))\
              .orderBy('pol_num')
 
-master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
-
-# COMMAND ----------
-
-# Store df to parquet
-spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-#master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
-master_df.write.mode('overwrite').partitionBy('image_date').parquet(f"/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND")
-master_df = spark.read.parquet('/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND').filter(F.col('image_date') == max_date_str)
+#master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
@@ -563,13 +696,23 @@ po_pol_dict = sub.rdd.collectAsMap()
 
 # COMMAND ----------
 
-# DBTITLE 1,policies
-agt = agt_all.select('agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier', 'no_sbw_completed').toPandas()
+agt = agt_all.select('agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier', 'no_sbw_completed').dropDuplicates()
+agt = agt.toPandas()
 #agt = tagt[['agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier']]
 agt = agt.rename(columns={'agt_code': 'agt_cd'})
-agt_list = agt_all.select('agt_code').dropDuplicates().collect()
-#print(agt_list)
-agt[agt['tier'] != 'Unranked']
+agt_list = agt_all.select('agt_code').collect()
+print("Total agents:", len(agt_list))
+print("ManuPro agents:", agt[agt['tier'] != 'Unranked'].shape[0])
+
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = agt['agt_cd'].nunique()
+no_of_rows = agt.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = agt[agt.duplicated(subset='agt_cd', keep=False)]
+    display(duplicate_agt_cd)
 
 # COMMAND ----------
 
@@ -827,18 +970,28 @@ f = f.withColumn('last_mth_NT_per', F.when(F.col('last_mth_pol') != 0, 1-(F.col(
     .withColumn('12M_NT_rate', F.when(F.col('last_12m_NT') != 0, 1-(F.col('last_12m_NT')/F.col('last_12m_pol'))).otherwise(1))\
     .fillna(1)
 
-f.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
+#f.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
 tclaim = tclaim_df.toPandas()
 final = f.toPandas()
 
+# Check for duplicates in column "wa_cd_1" in dataframe "final"
+duplicate_final = final.duplicated(subset='wa_cd_1').sum()
+
+# Check for duplicates in column "agt_cd" in dataframe "agt"
+duplicate_agt = agt.duplicated(subset='agt_cd', keep=False).sum()
+
+# Print the duplicate rows
+print("Duplicate rows in final:", duplicate_final)
+print("Duplicate rows in agt:", duplicate_agt)
+
 final = final.rename(columns = {'wa_cd_1':'agt_cd'})
-final = agt.merge(final, on='agt_cd', how='inner').reset_index()
+final = agt.merge(final, on='agt_cd', how='left').reset_index()
 
 #final.head(10)
-final.shape
+#final.shape
 
 # COMMAND ----------
 
@@ -847,17 +1000,17 @@ final.shape
 
 # COMMAND ----------
 
-f1_chk = f1.toPandas().drop('wa_cd_1', axis='columns')
-f2_chk = f2.toPandas().drop('wa_cd_1', axis='columns')
-f3_chk = f3.toPandas().drop('wa_cd_1', axis='columns')
+#f1_chk = f1.toPandas().drop('wa_cd_1', axis='columns')
+#f2_chk = f2.toPandas().drop('wa_cd_1', axis='columns')
+#f3_chk = f3.toPandas().drop('wa_cd_1', axis='columns')
 
-f1_chk = print(f1_chk.sum())
-f2_chk = print(f2_chk.sum())
-f3_chk = print(f3_chk.sum())
+#f1_chk = print(f1_chk.sum())
+#f2_chk = print(f2_chk.sum())
+#f3_chk = print(f3_chk.sum())
 
-del f1_chk
-del f2_chk
-del f3_chk
+#del f1_chk
+#del f2_chk
+#del f3_chk
 
 # COMMAND ----------
 
@@ -871,7 +1024,7 @@ avg_sales = master_df.filter((F.col('last_n_month_eff_cvg').between(-12, -1)) &
                             .groupBy(['wa_cd_1', 'year_month']).agg(F.sum('adjust_ape').alias('ape'))\
                             .groupBy(['year_month']).agg(F.mean('ape').cast('integer').alias('avg_ape_tier'))\
                             .withColumnRenamed('year_month', 'date')
-avg_sales.display()
+#avg_sales.display()
 
 mth_sales = master_df.filter((F.col('last_n_month_eff_cvg').between(-12, -1)) & 
                              (~F.col('pol_stat_cd').isin(['A', 'N', 'R'])))\
@@ -889,7 +1042,7 @@ mth_prd = master_df.filter((F.col('last_n_month_eff_cvg').between(-12, -1)) &
                            (~F.col('pol_stat_cd').isin(['A', 'N', 'R'])))\
                           .groupBy(['wa_cd_1', 'type']).agg(F.sum('adjust_ape').alias('sum_ape_agt'))\
                           .withColumnRenamed('wa_cd_1', 'agt_cd').withColumnRenamed('type', 'prd_type')
-#mth_prd.display()
+
 #ape_all_agt = master_df.filter(F.col('year_month') == mth_partition)\
 #                            .groupBy(['wa_cd_1']).agg(F.sum('adjust_ape').alias('adjust_ape')).toPandas()
 
@@ -949,7 +1102,17 @@ clm = clm.reset_index()
 
 final = final.merge(clm, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -968,7 +1131,17 @@ lps_diag['lps_pol_list'] = lps_diag['lps_pol_list'].map(lambda x: list(set(x)))
 
 final = final.merge(lps_diag, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1005,25 +1178,41 @@ nm_diag = nm_diag.groupby(['agt_cd'])['pol_num'].apply(list).reset_index().renam
 
 final = final.merge(nm_diag, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
 # KPIs for APE tier (non-Platinum)
-#agt_tier = agt.rename(columns = {'agt_code':'agt_cd'})
 
 next_tier = dict({'Unranked': 'Silver', 'Silver': 'Gold', 'Gold': 'Platinum', 'Platinum': 'MDRT', 'MDRT': 'COT', 'COT': 'TOT', 'TOT': 'TOT'})
 ape_all_agt = final.groupby(['agt_cd'])['last_mth_ape'].sum()
 last_mth_ape_dict = ape_all_agt.to_dict()
 last_mth_ape_rank_dict = ape_all_agt.rank(ascending=False).astype(int).to_dict()
-#display(last_mth_ape_rank_dict)
-#agt_tier['last_mth_ape'] = agt_tier['agt_cd'].map(lambda x: last_mth_ape_dict[x] if x in last_mth_ape_dict else 0)
+
 final['rank_of_last_mth_ape'] = final['agt_cd'].map(lambda x: last_mth_ape_rank_dict[x] if x in last_mth_ape_rank_dict else np.nan)
 final['next_tier'] = final['tier'].map(lambda x: next_tier[x])
 final['next_tier_benchmark'] = final['next_tier'].map(lambda x: ape_benchmark[x] if x in ape_benchmark else np.nan)
 final['tenure_ym'] = final['tenure_mth'].map(lambda x: str(divmod(x, 12)[0]) + 'y ' + str(divmod(x, 12)[1]) + 'm')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1035,14 +1224,14 @@ final[final['agt_cd'].isin(['10193','10539'])]
 final['gap_to_next_tier'] = final['next_tier_benchmark'] - final['ape_ytd'].fillna(0)
 final['gap_to_next_tier'] = final['gap_to_next_tier'].map(lambda x: 0 if x < 0 else x)
 
-final[final['agt_cd'].isin(['10193','10539'])]
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
 # list out top 10 agents ranked by last month APE
-final[(final['rank_of_last_mth_ape']<10)&
+#final[(final['rank_of_last_mth_ape']<10)&
       #(final['tier']=='COT')&
-      (final['last_mth_ape']!=0)].sort_values(by=['rank_of_last_mth_ape'])
+#      (final['last_mth_ape']!=0)].sort_values(by=['rank_of_last_mth_ape'])
 
 # COMMAND ----------
 
@@ -1051,5 +1240,22 @@ final[(final['rank_of_last_mth_ape']<10)&
 
 # COMMAND ----------
 
+# DBTITLE 1,To file
 final['image_date'] = max_date_str
-final.to_parquet(f'{out_path}TPARDM_MTHEND/', partition_cols=['image_date'], engine='pyarrow', index=False)
+# Fix: Enforce int64 for all integer columns to prevent int32/int64 type mismatch
+# across partitions when Spark reads back the parquet files.
+# Root cause: Pandas/PyArrow may infer int32 for small values (e.g., 0 from fillna)
+# and int64 for larger values, causing "Failed to merge fields" on Spark read.
+for col in final.select_dtypes(include=['int32', 'int64', 'int16', 'int8']).columns:
+    final[col] = final[col].astype('int64')
+    
+# final.to_parquet(f'{out_path}TPARDM_MTHEND/', partition_cols=['image_date'], engine='pyarrow', index=False)
+print("Date:", max_date_str, ". Total agents:", final.shape[0])
+
+# COMMAND ----------
+
+# DBTITLE 1,To table
+tpardm_df =  spark.read.format("parquet").load(f"/mnt/lab/vn/project/cpm/datamarts/TPARDM_MTHEND/")
+tpardm_df = tpardm_df.filter(F.col("image_date") == max_date_str)
+
+tpardm_df.write.mode("overwrite").option("partitionOverwriteMode", "dynamic").partitionBy("image_date").saveAsTable("vn_aa_reports.tpardm_mthend")

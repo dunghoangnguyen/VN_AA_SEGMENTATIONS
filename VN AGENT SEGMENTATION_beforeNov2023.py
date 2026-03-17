@@ -27,7 +27,7 @@ pd.set_option('display.max_columns', 200)
 # COMMAND ----------
 
 # Set the number of months going backward
-x = 7  # Replace 1 with the desired number of months
+x = 15  # Replace 1 with the desired number of months
 
 # Calculate the last month-end
 current_date = pd.Timestamp.now()
@@ -162,13 +162,6 @@ sp_plan = df_list['TPLANS'].filter(F.col('SNGL_PREM_IND') == 'Y').select('PLAN_C
 
 # Generate temp views for data extraction and merging
 generate_temp_view(df_list)
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC
-# MAGIC select count(*) agents
-# MAGIC from   tagtdm_mthend
 
 # COMMAND ----------
 
@@ -400,9 +393,9 @@ print("No agents with 19m per: ", m19_per_vn.count())
 
 master_df = master_df.join(m19_per_vn, on='wa_cd_1', how='left')
 # write the master Spark dataframe to csv/parquet
-master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
+#master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
 # Reload the master dataset
-master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
+#master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
 
 # COMMAND ----------
 
@@ -448,7 +441,7 @@ master_df = master_df.withColumn("adjust_ape",
                              .otherwise(F.col("cvg_prem")*0.1)).cast('float'))
 
 master_df = master_df.fillna(value=0, subset=["adjust_ape"])
-master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
+#master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
@@ -469,9 +462,9 @@ master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 # COMMAND ----------
 
 # write the master Spark dataframe to csv/parquet
-master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
+#master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
 # Reload the master dataset
-master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
+#master_df = spark.read.parquet('/mnt/lab/vn/project/scratch/master_df')
 
 # COMMAND ----------
 
@@ -537,7 +530,7 @@ master_df = master_df.drop('cvg_eff_month', 'max_month')
 master_df = master_df.filter((F.col('max_date') >= F.col('cvg_eff_dt')) & (F.col('max_date') >= F.col('pol_eff_dt')))\
              .orderBy('pol_num')
 
-master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
+#master_df.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
@@ -547,10 +540,10 @@ print(max_date_str)
 # COMMAND ----------
 
 # Store df to parquet
-spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+#spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 #master_df.write.mode('overwrite').parquet(f'/mnt/lab/vn/project/scratch/master_df')
-master_df.write.mode('overwrite').partitionBy('image_date').parquet(f"/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND")
-master_df = spark.read.parquet('/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND').filter(F.col('image_date') == max_date_str)
+#master_df.write.mode('overwrite').partitionBy('image_date').parquet(f"/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND")
+#master_df = spark.read.parquet('/dbfs/mnt/lab/vn/project/cpm/datamarts/TAGTPAR_MTHEND').filter(F.col('image_date') == max_date_str)
 
 # COMMAND ----------
 
@@ -579,12 +572,23 @@ po_pol_dict = sub.rdd.collectAsMap()
 # COMMAND ----------
 
 # DBTITLE 1,policies
-agt = agt_all.select('agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier', 'no_sbw_completed').toPandas()
+agt = agt_all.select('agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier', 'no_sbw_completed').dropDuplicates()
+agt = agt.toPandas()
 #agt = tagt[['agt_code','agt_nm','rank_code', 'br_code', 'tenure_mth', 'agt_join_dt', 'tier']]
 agt = agt.rename(columns={'agt_code': 'agt_cd'})
-agt_list = agt_all.select('agt_code').dropDuplicates().collect()
-#print(agt_list)
-agt[agt['tier'] != 'Unranked']
+agt_list = agt_all.select('agt_code').collect()
+print("Total agents:", len(agt_list))
+print("Unranked agents:", agt[agt['tier'] != 'Unranked'].shape[0])
+
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = agt['agt_cd'].nunique()
+no_of_rows = agt.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = agt[agt.duplicated(subset='agt_cd', keep=False)]
+    display(duplicate_agt_cd)
 
 # COMMAND ----------
 
@@ -842,15 +846,28 @@ f = f.withColumn('last_mth_NT_per', F.when(F.col('last_mth_pol') != 0, 1-(F.col(
     .withColumn('12M_NT_rate', F.when(F.col('last_12m_NT') != 0, 1-(F.col('last_12m_NT')/F.col('last_12m_pol'))).otherwise(1))\
     .fillna(1)
 
-f.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
+#f.filter(F.col('wa_cd_1').isin(['10193','10539'])).display()
 
 # COMMAND ----------
 
 tclaim = tclaim_df.toPandas()
 final = f.toPandas()
 
+
+# Check for duplicates in column "wa_cd_1" in dataframe "final"
+duplicate_final = final.duplicated(subset='wa_cd_1').sum()
+
+# Check for duplicates in column "agt_cd" in dataframe "agt"
+duplicate_agt = agt.duplicated(subset='agt_cd', keep=False).sum()
+
+# Print the duplicate rows
+print("Duplicate rows in final:")
+print(duplicate_final)
+print("Duplicate rows in agt:")
+print(duplicate_agt)
+
 final = final.rename(columns = {'wa_cd_1':'agt_cd'})
-final = agt.merge(final, on='agt_cd', how='inner').reset_index()
+final = agt.merge(final, on='agt_cd', how='left').reset_index()
 
 #final.head(10)
 final.shape
@@ -886,7 +903,7 @@ avg_sales = master_df.filter((F.col('last_n_month_eff_cvg').between(-12, -1)) &
                             .groupBy(['wa_cd_1', 'year_month']).agg(F.sum('adjust_ape').alias('ape'))\
                             .groupBy(['year_month']).agg(F.mean('ape').cast('integer').alias('avg_ape_tier'))\
                             .withColumnRenamed('year_month', 'date')
-avg_sales.display()
+#avg_sales.display()
 
 mth_sales = master_df.filter((F.col('last_n_month_eff_cvg').between(-12, -1)) & 
                              (~F.col('pol_stat_cd').isin(['A', 'N', 'R'])))\
@@ -964,7 +981,16 @@ clm = clm.reset_index()
 
 final = final.merge(clm, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -983,7 +1009,16 @@ lps_diag['lps_pol_list'] = lps_diag['lps_pol_list'].map(lambda x: list(set(x)))
 
 final = final.merge(lps_diag, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1020,7 +1055,16 @@ nm_diag = nm_diag.groupby(['agt_cd'])['pol_num'].apply(list).reset_index().renam
 
 final = final.merge(nm_diag, on='agt_cd', how='left')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1038,7 +1082,16 @@ final['next_tier'] = final['tier'].map(lambda x: next_tier[x])
 final['next_tier_benchmark'] = final['next_tier'].map(lambda x: ape_benchmark[x] if x in ape_benchmark else np.nan)
 final['tenure_ym'] = final['tenure_mth'].map(lambda x: str(divmod(x, 12)[0]) + 'y ' + str(divmod(x, 12)[1]) + 'm')
 
-final[final['agt_cd'].isin(['10193','10539'])]
+# Get the count of unique agt_cd and the total number of rows
+no_of_agents = final['agt_cd'].nunique()
+no_of_rows = final.shape[0]
+
+# Check if no_of_rows is not equal to no_of_agents
+if no_of_rows != no_of_agents:
+    # Find the duplicated agt_cd rows
+    duplicate_agt_cd = final[final.duplicated(subset='agt_cd', keep=False)]
+    print(duplicate_agt_cd)
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1050,7 +1103,7 @@ final[final['agt_cd'].isin(['10193','10539'])]
 final['gap_to_next_tier'] = final['next_tier_benchmark'] - final['ape_ytd'].fillna(0)
 final['gap_to_next_tier'] = final['gap_to_next_tier'].map(lambda x: 0 if x < 0 else x)
 
-final[final['agt_cd'].isin(['10193','10539'])]
+#final[final['agt_cd'].isin(['10193','10539'])]
 
 # COMMAND ----------
 
@@ -1068,3 +1121,4 @@ final[(final['rank_of_last_mth_ape']<10)&
 
 final['image_date'] = max_date_str
 final.to_parquet(f'{out_path}TPARDM_MTHEND/', partition_cols=['image_date'], engine='pyarrow', index=False)
+print("Date:", max_date_str, ", agents:", final.shape[0])
